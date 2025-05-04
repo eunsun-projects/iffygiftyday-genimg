@@ -3,10 +3,10 @@ import { createClient } from "@/lib/supabase/server";
 import { generateUUID } from "@/lib/utils";
 import type { Iffy } from "@/types/iffy.types";
 import { type NextRequest, NextResponse } from "next/server";
-// fs 모듈은 더 이상 필요하지 않으므로 제거하거나 주석 처리합니다.
-// import fs from "node:fs";
 import OpenAI, { toFile } from "openai";
 import sharp from "sharp";
+
+export const maxDuration = 120; // This function can run for a maximum of 120 seconds
 
 const openaiApiKey = process.env.OPENAI_API_KEY;
 if (!openaiApiKey) {
