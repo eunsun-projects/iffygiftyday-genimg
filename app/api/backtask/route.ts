@@ -10,195 +10,195 @@ import sharp from "sharp";
 
 const openaiApiKey = process.env.OPENAI_API_KEY;
 if (!openaiApiKey) {
-  throw new Error("Missing environment variable OPENAI_API_KEY");
+	throw new Error("Missing environment variable OPENAI_API_KEY");
 }
 
 const openai = new OpenAI({ apiKey: openaiApiKey });
 const IMAGE_EDIT_TIMEOUT_MS = 89 * 1000; // 89초 타임아웃 설정
 
 export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const id = searchParams.get("id");
-  const supabase = await createClient();
-  let isError = false;
-  let reason = "";
-  let imageBase64: string | undefined = undefined;
+	const { searchParams } = new URL(request.url);
+	const id = searchParams.get("id");
+	const supabase = await createClient();
+	let isError = false;
+	let reason = "";
+	let imageBase64: string | undefined = undefined;
 
-  if (!id) {
-    return NextResponse.json({ error: "No id provided" }, { status: 400 });
-  }
+	if (!id) {
+		return NextResponse.json({ error: "No id provided" }, { status: 400 });
+	}
 
-  const { data: iffy, error } = await getIffy({ id });
+	const { data: iffy, error } = await getIffy({ id });
 
-  if (error) {
-    // 오류 처리 개선: 오류 내용을 로그에 남기거나 사용자에게 더 자세히 알릴 수 있습니다.
-    console.error("Failed to get iffy data:", error);
-    return NextResponse.json(
-      { error: "Failed to retrieve Iffy data" },
-      { status: 500 }
-    );
-  }
-  if (!iffy) {
-    // iffy 데이터가 null일 경우 처리
-    return NextResponse.json(
-      { error: "Iffy data not found for the provided ID" },
-      { status: 404 }
-    );
-  }
+	if (error) {
+		// 오류 처리 개선: 오류 내용을 로그에 남기거나 사용자에게 더 자세히 알릴 수 있습니다.
+		console.error("Failed to get iffy data:", error);
+		return NextResponse.json(
+			{ error: "Failed to retrieve Iffy data" },
+			{ status: 500 },
+		);
+	}
+	if (!iffy) {
+		// iffy 데이터가 null일 경우 처리
+		return NextResponse.json(
+			{ error: "Iffy data not found for the provided ID" },
+			{ status: 404 },
+		);
+	}
 
-  const stylePrompt = iffy.style_prompt;
-  const originalImgUrl = iffy.gift_image_url; // 변수명 변경 (URL임을 명시)
+	const stylePrompt = iffy.style_prompt;
+	const originalImgUrl = iffy.gift_image_url; // 변수명 변경 (URL임을 명시)
 
-  try {
-    // 1. URL에서 이미지 데이터 가져오기
-    console.log(`Fetching image from URL: ${originalImgUrl}`);
-    const response = await fetch(originalImgUrl);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch image: ${response.statusText}`);
-    }
-    // 이미지 데이터를 ArrayBuffer로 읽기
-    const imageArrayBuffer = await response.arrayBuffer();
-    // ArrayBuffer를 Buffer로 변환 (Node.js 환경에서 Buffer가 더 일반적)
-    const imageBuffer = Buffer.from(imageArrayBuffer);
+	try {
+		// 1. URL에서 이미지 데이터 가져오기
+		console.log(`Fetching image from URL: ${originalImgUrl}`);
+		const response = await fetch(originalImgUrl);
+		if (!response.ok) {
+			throw new Error(`Failed to fetch image: ${response.statusText}`);
+		}
+		// 이미지 데이터를 ArrayBuffer로 읽기
+		const imageArrayBuffer = await response.arrayBuffer();
+		// ArrayBuffer를 Buffer로 변환 (Node.js 환경에서 Buffer가 더 일반적)
+		const imageBuffer = Buffer.from(imageArrayBuffer);
 
-    // // 파일 이름 및 MIME 타입 추론 (URL 또는 응답 헤더 사용 가능) -> PNG 기준으로 수정
-    // // 원본 URL에서 파일 이름 부분 추출 시도, 없으면 기본값 사용. 확장자는 .png로 고정
-    const baseFilename =
-      originalImgUrl
-        .substring(originalImgUrl.lastIndexOf("/") + 1)
-        ?.split(".")?.[0] || "image";
-    const filenamePng = `${baseFilename}.png`;
-    const mimeTypePng = "image/png"; // MIME 타입을 image/png로 고정
+		// // 파일 이름 및 MIME 타입 추론 (URL 또는 응답 헤더 사용 가능) -> PNG 기준으로 수정
+		// // 원본 URL에서 파일 이름 부분 추출 시도, 없으면 기본값 사용. 확장자는 .png로 고정
+		const baseFilename =
+			originalImgUrl
+				.substring(originalImgUrl.lastIndexOf("/") + 1)
+				?.split(".")?.[0] || "image";
+		const filenamePng = `${baseFilename}.png`;
+		const mimeTypePng = "image/png"; // MIME 타입을 image/png로 고정
 
-    // toFile 유틸리티 사용하여 FileLike 객체 생성 (변환된 PNG Buffer 사용)
-    console.log("Using toFile to prepare PNG image for openai.images.edit");
-    const imageFileForApi = await toFile(imageBuffer, filenamePng, {
-      // pngInputBuffer와 filenamePng 사용
-      type: mimeTypePng, // mimeTypePng 사용
-    });
+		// toFile 유틸리티 사용하여 FileLike 객체 생성 (변환된 PNG Buffer 사용)
+		console.log("Using toFile to prepare PNG image for openai.images.edit");
+		const imageFileForApi = await toFile(imageBuffer, filenamePng, {
+			// pngInputBuffer와 filenamePng 사용
+			type: mimeTypePng, // mimeTypePng 사용
+		});
 
-    try {
-      // 2. OpenAI 이미지 편집 API 호출 (타임아웃 적용)
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(
-          () =>
-            reject(
-              new Error(
-                `OpenAI 이미지 편집 시간 초과 (${
-                  IMAGE_EDIT_TIMEOUT_MS / 1000
-                }초)`
-              )
-            ),
-          IMAGE_EDIT_TIMEOUT_MS
-        )
-      );
+		try {
+			// 2. OpenAI 이미지 편집 API 호출 (타임아웃 적용)
+			const timeoutPromise = new Promise((_, reject) =>
+				setTimeout(
+					() =>
+						reject(
+							new Error(
+								`OpenAI 이미지 편집 시간 초과 (${
+									IMAGE_EDIT_TIMEOUT_MS / 1000
+								}초)`,
+							),
+						),
+					IMAGE_EDIT_TIMEOUT_MS,
+				),
+			);
 
-      const imageEditPromise = openai.images.edit({
-        model: "gpt-image-1", // 사용자가 확인한 모델 이름 유지
-        image: imageFileForApi, // PNG 데이터가 포함된 FileLike 객체
-        prompt: stylePrompt,
-        size: "1024x1024",
-      });
+			const imageEditPromise = openai.images.edit({
+				model: "gpt-image-1", // 사용자가 확인한 모델 이름 유지
+				image: imageFileForApi, // PNG 데이터가 포함된 FileLike 객체
+				prompt: stylePrompt,
+				size: "1024x1024",
+			});
 
-      // Promise.race를 사용하여 API 호출과 타임아웃 경쟁
-      const stylizedResult = (await Promise.race([
-        imageEditPromise,
-        timeoutPromise,
-      ])) as OpenAI.Images.ImagesResponse; // 타입 단언 추가
+			// Promise.race를 사용하여 API 호출과 타임아웃 경쟁
+			const stylizedResult = (await Promise.race([
+				imageEditPromise,
+				timeoutPromise,
+			])) as OpenAI.Images.ImagesResponse; // 타입 단언 추가
 
-      imageBase64 = stylizedResult.data?.[0]?.b64_json;
+			imageBase64 = stylizedResult.data?.[0]?.b64_json;
 
-      if (!imageBase64) {
-        throw new Error("이미지 스타일화 실패: Base64 데이터가 없습니다.");
-      }
-    } catch (error) {
-      // biome-ignore lint/suspicious/noExplicitAny: <explanation>
-      if ((error as any).code === "moderation_blocked") {
-        isError = true;
-        reason = "문제의 소지가 있는 이미지에요! 다시 시도해주세요";
-      }
-    }
+			if (!imageBase64) {
+				throw new Error("이미지 스타일화 실패: Base64 데이터가 없습니다.");
+			}
+		} catch (error) {
+			// biome-ignore lint/suspicious/noExplicitAny: <explanation>
+			if ((error as any).code === "moderation_blocked") {
+				isError = true;
+				reason = "문제의 소지가 있는 이미지에요! 다시 시도해주세요";
+			}
+		}
 
-    if (!imageBase64) {
-      throw new Error("이미지 스타일화 실패: Base64 데이터가 없습니다.");
-    }
-    // 3. Base64 -> WebP 변환 및 업로드 (기존 코드 유지)
-    const pngBuffer = Buffer.from(imageBase64, "base64");
-    console.log("Sharp로 이미지 변환 시작 (PNG -> WebP)...");
-    const webpBuffer = await sharp(pngBuffer).webp({ quality: 80 }).toBuffer();
-    console.log("WebP 변환 완료.");
+		if (!imageBase64) {
+			throw new Error("이미지 스타일화 실패: Base64 데이터가 없습니다.");
+		}
+		// 3. Base64 -> WebP 변환 및 업로드 (기존 코드 유지)
+		const pngBuffer = Buffer.from(imageBase64, "base64");
+		console.log("Sharp로 이미지 변환 시작 (PNG -> WebP)...");
+		const webpBuffer = await sharp(pngBuffer).webp({ quality: 80 }).toBuffer();
+		console.log("WebP 변환 완료.");
 
-    const filePath = `iffy/${Date.now()}-${generateUUID()}.webp`;
-    console.log("Supabase에 WebP 이미지 업로드 시작...");
-    const { data: uploadData, error: uploadError } = await supabase.storage
-      .from("imageFile")
-      .upload(filePath, webpBuffer, {
-        contentType: "image/webp",
-        upsert: true,
-      });
+		const filePath = `iffy/${Date.now()}-${generateUUID()}.webp`;
+		console.log("Supabase에 WebP 이미지 업로드 시작...");
+		const { data: uploadData, error: uploadError } = await supabase.storage
+			.from("imageFile")
+			.upload(filePath, webpBuffer, {
+				contentType: "image/webp",
+				upsert: true,
+			});
 
-    if (uploadError) {
-      console.error("[iffy] Supabase upload error:", uploadError);
-      throw new Error("Failed to upload generated image to storage.");
-    }
+		if (uploadError) {
+			console.error("[iffy] Supabase upload error:", uploadError);
+			throw new Error("Failed to upload generated image to storage.");
+		}
 
-    const { data: publicUrlData } = supabase.storage
-      .from("imageFile")
-      .getPublicUrl(filePath);
+		const { data: publicUrlData } = supabase.storage
+			.from("imageFile")
+			.getPublicUrl(filePath);
 
-    if (!publicUrlData || !publicUrlData.publicUrl) {
-      throw new Error("Failed to get public URL for the uploaded image.");
-    }
+		if (!publicUrlData || !publicUrlData.publicUrl) {
+			throw new Error("Failed to get public URL for the uploaded image.");
+		}
 
-    const newImageUrl = publicUrlData.publicUrl;
+		const newImageUrl = publicUrlData.publicUrl;
 
-    const iffyToSupabase: Iffy = {
-      ...iffy,
-      gift_image_url: newImageUrl, // 새 이미지 URL로 업데이트
-      updated_at: new Date().toISOString(),
-      status: "completed",
-    };
+		const iffyToSupabase: Iffy = {
+			...iffy,
+			gift_image_url: newImageUrl, // 새 이미지 URL로 업데이트
+			updated_at: new Date().toISOString(),
+			status: "completed",
+		};
 
-    const { data: iffyData, error: iffyError } = await saveIffy({
-      iffy: iffyToSupabase,
-    });
+		const { data: iffyData, error: iffyError } = await saveIffy({
+			iffy: iffyToSupabase,
+		});
 
-    if (iffyError) {
-      console.error("Failed to save iffy to supabase:", iffyError);
-      return NextResponse.json(
-        { error: "Failed to save iffy to supabase" },
-        { status: 500 }
-      );
-    }
+		if (iffyError) {
+			console.error("Failed to save iffy to supabase:", iffyError);
+			return NextResponse.json(
+				{ error: "Failed to save iffy to supabase" },
+				{ status: 500 },
+			);
+		}
 
-    return NextResponse.json(iffyData, { status: 200 });
-  } catch (error) {
-    // 통합 오류 처리
-    console.error("Error during image processing:", error);
+		return NextResponse.json(iffyData, { status: 200 });
+	} catch (error) {
+		// 통합 오류 처리
+		console.error("Error during image processing:", error);
 
-    // supabase에 오류 저장
-    const { data: iffyData, error: iffyError } = await saveIffy({
-      iffy: {
-        ...iffy,
-        status: "failed",
-        updated_at: new Date().toISOString(),
-      },
-    });
+		// supabase에 오류 저장
+		const { data: iffyData, error: iffyError } = await saveIffy({
+			iffy: {
+				...iffy,
+				status: "failed",
+				updated_at: new Date().toISOString(),
+			},
+		});
 
-    if (iffyError) {
-      console.error("Failed to save iffy to supabase:", iffyError);
-      return NextResponse.json(
-        { error: "Failed to save iffy to supabase" },
-        { status: 500 }
-      );
-    }
+		if (iffyError) {
+			console.error("Failed to save iffy to supabase:", iffyError);
+			return NextResponse.json(
+				{ error: "Failed to save iffy to supabase" },
+				{ status: 500 },
+			);
+		}
 
-    const errorMessage =
-      error instanceof Error ? error.message : "An unknown error occurred";
-    // 클라이언트에게는 일반적인 오류 메시지를 반환하고, 서버 로그에는 자세한 내용을 남깁니다.
-    return NextResponse.json(
-      { error: "Image processing failed.", details: errorMessage },
-      { status: 500 }
-    );
-  }
+		const errorMessage =
+			error instanceof Error ? error.message : "An unknown error occurred";
+		// 클라이언트에게는 일반적인 오류 메시지를 반환하고, 서버 로그에는 자세한 내용을 남깁니다.
+		return NextResponse.json(
+			{ error: "Image processing failed.", details: errorMessage },
+			{ status: 500 },
+		);
+	}
 }
