@@ -16,6 +16,50 @@ if (!openaiApiKey) {
 const openai = new OpenAI({ apiKey: openaiApiKey });
 const IMAGE_EDIT_TIMEOUT_MS = 89 * 1000; // 89초 타임아웃 설정
 
+// Helper function for fetch with retry logic
+async function fetchWithRetry(
+  url: string,
+  retries = 3,
+  delay = 1000
+): Promise<Response> {
+  for (let i = 0; i < retries; i++) {
+    try {
+      console.log(`Attempt ${i + 1}: Fetching image from URL: ${url}`);
+      const response = await fetch(url);
+      if (response.ok) {
+        return response; // 성공 시 즉시 반환
+      }
+      // 5xx 서버 오류인 경우 재시도
+      if (response.status >= 500 && i < retries - 1) {
+        // 마지막 시도가 아닐 때만 재시도
+        console.warn(
+          `Fetch attempt ${i + 1} failed with status ${response.status} ${
+            response.statusText
+          }. Retrying in ${(delay * (i + 1)) / 1000}s...`
+        );
+        await new Promise((resolve) => setTimeout(resolve, delay * (i + 1))); // 지연 시간 증가
+      } else {
+        // 5xx 외의 오류 또는 마지막 재시도 실패 시 오류 발생
+        throw new Error(
+          `Failed to fetch image: ${response.status} ${response.statusText}`
+        );
+      }
+    } catch (error) {
+      console.error(`Fetch attempt ${i + 1} threw an error:`, error);
+      if (i === retries - 1) {
+        // 마지막 시도에서 발생한 에러 throw
+        throw error;
+      }
+      // 마지막 시도가 아니면 재시도를 위해 대기
+      await new Promise((resolve) => setTimeout(resolve, delay * (i + 1)));
+    }
+  }
+  // 모든 재시도 실패 시 (이론상 도달하기 어렵지만 안전을 위해 추가)
+  throw new Error(
+    `Failed to fetch image after ${retries} attempts from URL: ${url}`
+  );
+}
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const id = searchParams.get("id");
@@ -50,12 +94,9 @@ export async function GET(request: NextRequest) {
   const originalImgUrl = iffy.gift_image_url; // 변수명 변경 (URL임을 명시)
 
   try {
-    // 1. URL에서 이미지 데이터 가져오기
-    console.log(`Fetching image from URL: ${originalImgUrl}`);
-    const response = await fetch(originalImgUrl);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch image: ${response.statusText}`);
-    }
+    // 1. URL에서 이미지 데이터 가져오기 (재시도 로직 포함)
+    console.log(`Fetching image from URL with retry: ${originalImgUrl}`);
+    const response = await fetchWithRetry(originalImgUrl); // Use fetchWithRetry
     // 이미지 데이터를 ArrayBuffer로 읽기
     const imageArrayBuffer = await response.arrayBuffer();
     // ArrayBuffer를 Buffer로 변환 (Node.js 환경에서 Buffer가 더 일반적)
@@ -117,12 +158,46 @@ export async function GET(request: NextRequest) {
       if ((error as any).code === "moderation_blocked") {
         isError = true;
         reason = "문제의 소지가 있는 이미지에요! 다시 시도해주세요";
+      } else {
+        // moderation_blocked 외 다른 OpenAI 에러
+        isError = true;
+        reason = `OpenAI 이미지 편집 중 오류 발생: ${
+          error instanceof Error ? error.message : String(error)
+        }`;
       }
     }
 
-    if (!imageBase64) {
-      throw new Error("이미지 스타일화 실패: Base64 데이터가 없습니다.");
+    if (isError) {
+      // OpenAI 에러 발생 시 (moderation 포함) iffy 상태 업데이트 및 종료
+      console.error(`Image generation failed due to OpenAI error: ${reason}`);
+      await saveIffy({
+        iffy: {
+          ...iffy,
+          status: "failed",
+          updated_at: new Date().toISOString(),
+          // 실패 사유를 저장할 필드가 있다면 추가: failure_reason: reason
+        },
+      });
+      return NextResponse.json({ error: reason }, { status: 500 }); // 에러 응답 반환
     }
+
+    if (!imageBase64) {
+      // imageBase64가 없는 경우 (예: OpenAI API가 빈 데이터를 반환)
+      isError = true;
+      reason =
+        "이미지 스타일화 실패: OpenAI API로부터 유효한 이미지 데이터를 받지 못했습니다.";
+      console.error(reason);
+      await saveIffy({
+        iffy: {
+          ...iffy,
+          status: "failed",
+          updated_at: new Date().toISOString(),
+          // failure_reason: reason
+        },
+      });
+      return NextResponse.json({ error: reason }, { status: 500 });
+    }
+
     // 3. Base64 -> WebP 변환 및 업로드 (기존 코드 유지)
     const pngBuffer = Buffer.from(imageBase64, "base64");
     console.log("Sharp로 이미지 변환 시작 (PNG -> WebP)...");
@@ -179,12 +254,26 @@ export async function GET(request: NextRequest) {
     // 통합 오류 처리
     console.error("Error during image processing:", error);
 
-    // supabase에 오류 저장
+    // 실패 사유 결정
+    let failureReason = "An unknown error occurred during image processing.";
+    if (error instanceof Error) {
+      failureReason = error.message;
+    } else if (typeof error === "string") {
+      failureReason = error;
+    }
+
+    // isError 플래그와 reason 변수 사용 (통합 오류 처리 이전에 설정되었을 수 있음)
+    if (isError && reason) {
+      failureReason = reason; // OpenAI 관련 오류 메시지 사용
+    }
+
+    // supabase에 오류 상태 및 사유 저장
     const { data: iffyData, error: iffyError } = await saveIffy({
       iffy: {
         ...iffy,
         status: "failed",
         updated_at: new Date().toISOString(),
+        // 실패 사유를 저장할 필드가 있다면 추가: failure_reason: failureReason
       },
     });
 
@@ -196,11 +285,9 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const errorMessage =
-      error instanceof Error ? error.message : "An unknown error occurred";
     // 클라이언트에게는 일반적인 오류 메시지를 반환하고, 서버 로그에는 자세한 내용을 남깁니다.
     return NextResponse.json(
-      { error: "Image processing failed.", details: errorMessage },
+      { error: "Image processing failed.", details: failureReason }, // 실패 사유 포함
       { status: 500 }
     );
   }
