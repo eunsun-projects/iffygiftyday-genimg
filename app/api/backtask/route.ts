@@ -14,7 +14,7 @@ if (!openaiApiKey) {
 }
 
 const openai = new OpenAI({ apiKey: openaiApiKey });
-const IMAGE_EDIT_TIMEOUT_MS = 89 * 1000; // 89초 타임아웃 설정
+const IMAGE_EDIT_TIMEOUT_MS = 120 * 1000; // 120초 타임아웃 설정
 
 // Helper function for fetch with retry logic
 async function fetchWithRetry(
