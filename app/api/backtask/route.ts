@@ -6,7 +6,7 @@ import { type NextRequest, NextResponse } from "next/server";
 import OpenAI, { toFile } from "openai";
 import sharp from "sharp";
 
-export const maxDuration = 120; // This function can run for a maximum of 120 seconds
+export const maxDuration = 180; // This function can run for a maximum of 180 seconds
 
 const openaiApiKey = process.env.OPENAI_API_KEY;
 if (!openaiApiKey) {
@@ -14,7 +14,7 @@ if (!openaiApiKey) {
 }
 
 const openai = new OpenAI({ apiKey: openaiApiKey });
-const IMAGE_EDIT_TIMEOUT_MS = 120 * 1000; // 120초 타임아웃 설정
+const IMAGE_EDIT_TIMEOUT_MS = 180 * 1000; // 180초 타임아웃 설정
 
 // Helper function for fetch with retry logic
 async function fetchWithRetry(
