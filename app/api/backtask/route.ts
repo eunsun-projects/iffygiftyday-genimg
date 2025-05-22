@@ -140,6 +140,7 @@ export async function GET(request: NextRequest) {
         image: imageFileForApi, // PNG 데이터가 포함된 FileLike 객체
         prompt: stylePrompt,
         size: "1024x1024",
+        quality: "medium", // quality 옵션 추가: medium 으로 강제
       });
 
       // Promise.race를 사용하여 API 호출과 타임아웃 경쟁
