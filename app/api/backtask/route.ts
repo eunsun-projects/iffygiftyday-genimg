@@ -150,6 +150,10 @@ export async function GET(request: NextRequest) {
 
       imageBase64 = stylizedResult.data?.[0]?.b64_json;
 
+      if (stylizedResult.usage) {
+        console.log("캐릭터 생성 token 사용량: ", stylizedResult.usage);
+      }
+
       if (!imageBase64) {
         throw new Error("이미지 스타일화 실패: Base64 데이터가 없습니다.");
       }
